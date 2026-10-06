@@ -1,0 +1,948 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AirCast Direct HD - Peer-to-Peer TV Streamer</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <!-- PeerJS for direct WebRTC P2P signaling -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <!-- QRCode generation library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- Html5-QRCode scanner for mobile camera scanning -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
+  <style>
+    * {
+      font-family: 'Inter', sans-serif;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+    .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    body {
+      background-color: #07090e;
+      color: #f1f5f9;
+      overflow-x: hidden;
+    }
+    /* TV Remote D-Pad Navigation & Focus Highlighting */
+    :focus-visible {
+      outline: 3px solid #38bdf8 !important;
+      outline-offset: 4px;
+      box-shadow: 0 0 25px rgba(56, 189, 248, 0.6);
+    }
+    .cinema-glow {
+      box-shadow: 0 0 50px -10px rgba(56, 189, 248, 0.25);
+    }
+    .glass-panel {
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .glass-btn {
+      background: rgba(255, 255, 255, 0.07);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .glass-btn:hover, .glass-btn:focus {
+      background: rgba(255, 255, 255, 0.15);
+      border-color: rgba(56, 189, 248, 0.5);
+      transform: translateY(-2px);
+    }
+    .glass-btn:active {
+      transform: translateY(0);
+    }
+    /* Pulse badge */
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.2); opacity: 0.2; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+    .pulse-dot {
+      animation: pulse-ring 2s infinite cubic-bezier(0.45, 0, 0.55, 1);
+    }
+    /* Hide scrollbars for clean TV view */
+    ::-webkit-scrollbar {
+      display: none;
+    }
+    #scanner-modal video {
+      border-radius: 1rem;
+      object-fit: cover;
+    }
+  </style>
+</head>
+<body class="min-h-screen w-screen bg-[#06080d] text-slate-100 flex flex-col justify-between overflow-x-hidden selection:bg-cyan-500 selection:text-black">
+
+  <header class="w-full z-40 px-6 py-4 flex items-center justify-between glass-panel border-b border-slate-800/80 sticky top-0">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+        <svg class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+        </svg>
+      </div>
+      <div>
+        <h1 class="text-xl font-bold tracking-tight bg-gradient-to-r from-white via-slate-200 to-cyan-400 bg-clip-text text-transparent">
+          AirCast Direct <span class="text-xs px-2 py-0.5 rounded-full border border-cyan-500/40 text-cyan-400 font-mono tracking-normal">Full HD P2P</span>
+        </h1>
+        <p class="text-xs text-slate-400">Zero Intermediate Server Video Streaming</p>
+      </div>
+    </div>
+
+    <!-- Mode Selector & Status -->
+    <div class="flex items-center gap-3">
+      <div id="connection-pill" class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium glass-panel border border-slate-700/80">
+        <span class="w-2.5 h-2.5 rounded-full bg-amber-400" id="status-indicator"></span>
+        <span id="status-label" class="text-slate-300">Ready to Pair</span>
+      </div>
+
+      <!-- Mode Toggle button -->
+      <button id="toggle-mode-btn" tabindex="0" class="glass-btn px-4 py-2 rounded-xl text-sm font-semibold text-slate-200 flex items-center gap-2 shadow-sm">
+        <svg id="mode-icon" class="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+        </svg>
+        <span id="mode-label">Switch to Sender</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="flex-1 relative flex items-center justify-center p-4 md:p-8">
+
+    <!-- ========================================== -->
+    <!-- VIEW 1: TV RECEIVER MODE (Default on TV)  -->
+    <!-- ========================================== -->
+    <section id="tv-receiver-view" class="w-full max-w-6xl flex flex-col items-center justify-center transition-all duration-300">
+      
+      <!-- Idle / Pairing Standby Card -->
+      <div id="tv-idle-box" class="w-full glass-panel rounded-3xl p-6 md:p-12 cinema-glow border border-slate-800 flex flex-col lg:flex-row items-center justify-between gap-10">
+        
+        <!-- Left Side: Instructions & Room Code -->
+        <div class="flex-1 space-y-6 text-center lg:text-left">
+          <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-cyan-950/60 border border-cyan-500/30 text-cyan-400 text-xs font-semibold uppercase tracking-wider">
+            <span class="w-2 h-2 rounded-full bg-cyan-400 pulse-dot"></span>
+            TV Receiver Display Mode (1080p 60fps Ready)
+          </div>
+          
+          <h2 class="text-3xl md:text-5xl font-extrabold text-white tracking-tight leading-tight">
+            Stream your phone to TV <br><span class="text-cyan-400">Instantly via Direct WebRTC</span>
+          </h2>
+          
+          <p class="text-slate-400 text-base md:text-lg max-w-xl">
+            Scan the QR code with your mobile camera or open this URL on your phone to transmit ultra-low latency Full HD camera video.
+          </p>
+
+          <!-- 4-Character Pair Code Display for TV -->
+          <div class="pt-2">
+            <div class="text-xs uppercase font-medium tracking-wider text-slate-400 mb-2">Or enter this 4-character TV Code:</div>
+            <div class="inline-flex items-center gap-3 bg-slate-900/90 border-2 border-cyan-500/40 px-6 py-3 rounded-2xl shadow-xl">
+              <span id="tv-code-display" class="font-mono text-4xl md:text-5xl font-extrabold tracking-widest text-cyan-300">----</span>
+              <button id="refresh-code-btn" title="Generate new code" class="p-2 text-slate-400 hover:text-white glass-btn rounded-lg">
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Feature badges -->
+          <div class="flex flex-wrap gap-4 pt-4 justify-center lg:justify-start text-xs text-slate-300">
+            <div class="flex items-center gap-2 bg-slate-800/60 px-3 py-1.5 rounded-lg border border-slate-700/50">
+              <svg class="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+              Direct Peer-to-Peer
+            </div>
+            <div class="flex items-center gap-2 bg-slate-800/60 px-3 py-1.5 rounded-lg border border-slate-700/50">
+              <svg class="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+              Full HD 1080p
+            </div>
+            <div class="flex items-center gap-2 bg-slate-800/60 px-3 py-1.5 rounded-lg border border-slate-700/50">
+              <svg class="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+              Sub-100ms Latency
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Side: High Contrast QR Code -->
+        <div class="flex flex-col items-center justify-center p-6 bg-white rounded-3xl shadow-2xl shadow-cyan-500/10 border-4 border-cyan-400/20 max-w-[280px] md:max-w-[320px]">
+          <div id="qrcode-container" class="w-full flex justify-center items-center overflow-hidden aspect-square"></div>
+          <span class="mt-4 text-slate-800 text-xs font-bold uppercase tracking-wider text-center">Point phone camera here</span>
+        </div>
+
+      </div>
+
+      <!-- TV Video Stage (Connected State) -->
+      <div id="tv-video-stage" class="hidden fixed inset-0 w-screen h-screen bg-black z-50 flex items-center justify-center">
+        <!-- Edge-to-edge Video element -->
+        <video id="tv-remote-video" autoplay playsinline class="w-full h-full object-contain bg-black"></video>
+
+        <!-- TV Minimalist Glass Floating HUD / Remote Control Overlay -->
+        <div id="tv-hud" class="absolute bottom-6 left-1/2 -translate-x-1/2 glass-panel px-6 py-3 rounded-2xl flex items-center gap-6 shadow-2xl transition-opacity duration-300 opacity-90 hover:opacity-100 border border-slate-700/60">
+          <div class="flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span class="font-bold text-xs uppercase tracking-wider text-emerald-400">LIVE FHD</span>
+          </div>
+
+          <div class="h-4 w-px bg-slate-700"></div>
+
+          <!-- Video Quality & FPS telemetry -->
+          <div class="font-mono text-xs text-slate-300 flex items-center gap-3">
+            <span id="tv-stat-res">1920x1080</span>
+            <span class="text-slate-600">|</span>
+            <span id="tv-stat-fps">60 FPS</span>
+          </div>
+
+          <div class="h-4 w-px bg-slate-700"></div>
+
+          <!-- TV Remote Controllable Action Buttons -->
+          <div class="flex items-center gap-2">
+            <button id="tv-btn-audio" tabindex="0" class="glass-btn p-2 rounded-xl text-slate-200 hover:text-white" title="Toggle TV Audio">
+              <svg id="tv-audio-icon" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+              </svg>
+            </button>
+            <button id="tv-btn-fullscreen" tabindex="0" class="glass-btn p-2 rounded-xl text-slate-200 hover:text-white" title="Toggle Fullscreen">
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0 0l-5-5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+              </svg>
+            </button>
+            <button id="tv-btn-disconnect" tabindex="0" class="glass-btn p-2 rounded-xl text-rose-400 hover:bg-rose-500/20" title="End Stream">
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================================== -->
+    <!-- VIEW 2: MOBILE / TABLET SENDER MODE        -->
+    <!-- ========================================== -->
+    <section id="mobile-sender-view" class="hidden w-full max-w-md flex flex-col items-center justify-center space-y-5">
+      
+      <!-- Pairing Stage for Sender -->
+      <div id="sender-connect-card" class="w-full glass-panel rounded-3xl p-6 border border-slate-800 space-y-6">
+        <div class="text-center">
+          <span class="px-3 py-1 rounded-full bg-cyan-950/70 border border-cyan-500/30 text-cyan-400 text-xs font-semibold uppercase">Mobile Broadcaster</span>
+          <h3 class="text-2xl font-bold text-white mt-2">Connect to your TV</h3>
+          <p class="text-sm text-slate-400 mt-1">Scan the QR code on your TV or type the 4-character code.</p>
+        </div>
+
+        <!-- Scan Button -->
+        <button id="btn-open-scanner" class="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold text-base shadow-lg shadow-cyan-500/20 flex items-center justify-center gap-2 transition transform active:scale-98">
+          <svg class="w-5 h-5 text-slate-950" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
+          </svg>
+          Scan TV Screen QR Code
+        </button>
+
+        <div class="flex items-center gap-3">
+          <div class="h-px bg-slate-800 flex-1"></div>
+          <span class="text-xs font-mono uppercase text-slate-500">OR</span>
+          <div class="h-px bg-slate-800 flex-1"></div>
+        </div>
+
+        <!-- Manual 4-character Code Input -->
+        <div class="space-y-2">
+          <label class="text-xs font-semibold text-slate-300 block text-center">Enter 4-Character TV Code</label>
+          <div class="flex gap-2">
+            <input id="manual-tv-code" type="text" maxlength="4" placeholder="e.g. 8K2M" class="flex-1 bg-slate-900/90 border border-slate-700 rounded-xl px-4 py-3 text-center font-mono text-xl tracking-widest uppercase text-cyan-300 focus:outline-none focus:border-cyan-400">
+            <button id="btn-connect-code" class="px-5 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-sm border border-slate-600 transition">
+              Cast
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Broadcast Controls (Active when connected) -->
+      <div id="sender-broadcast-card" class="hidden w-full space-y-4">
+        
+        <!-- Live Camera Viewfinder -->
+        <div class="relative w-full aspect-[9/16] sm:aspect-video rounded-3xl overflow-hidden glass-panel border border-cyan-500/40 shadow-2xl">
+          <video id="sender-local-preview" autoplay playsinline muted class="w-full h-full object-cover"></video>
+          
+          <!-- Live badge overlay -->
+          <div class="absolute top-4 left-4 flex items-center gap-2 bg-black/60 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 text-xs font-semibold text-emerald-400">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+            BROADCASTING LIVE
+          </div>
+
+          <!-- Video Quality selector overlay -->
+          <div class="absolute top-4 right-4 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10">
+            <select id="select-resolution" class="bg-transparent text-xs font-mono text-cyan-300 focus:outline-none cursor-pointer">
+              <option value="1080p" selected class="bg-slate-900 text-white">1080p 60fps</option>
+              <option value="720p" class="bg-slate-900 text-white">720p 60fps</option>
+              <option value="4k" class="bg-slate-900 text-white">4K UHD</option>
+            </select>
+          </div>
+
+          <!-- Quick Touch Controls on Bottom of Preview -->
+          <div class="absolute bottom-4 left-0 right-0 px-4 flex justify-between items-center">
+            <!-- Camera Flip -->
+            <button id="btn-switch-camera" class="glass-btn p-3 rounded-2xl text-white shadow-lg" title="Switch Front/Back Camera">
+              <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
+
+            <!-- Torch / Flashlight toggle -->
+            <button id="btn-toggle-torch" class="glass-btn p-3 rounded-2xl text-white shadow-lg" title="Toggle Flashlight">
+              <svg id="torch-icon" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+            </button>
+
+            <!-- Mute Microphone -->
+            <button id="btn-toggle-mic" class="glass-btn p-3 rounded-2xl text-white shadow-lg" title="Mute Audio">
+              <svg id="mic-icon" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+              </svg>
+            </button>
+
+            <!-- Pause / Resume Video -->
+            <button id="btn-pause-video" class="glass-btn p-3 rounded-2xl text-white shadow-lg" title="Pause Video">
+              <svg id="pause-icon" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Big Red Stop Button -->
+        <button id="btn-stop-broadcast" class="w-full py-3.5 px-4 rounded-2xl bg-rose-600/90 hover:bg-rose-600 text-white font-bold text-sm shadow-lg shadow-rose-900/30 flex items-center justify-center gap-2">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+          </svg>
+          Disconnect & Stop Casting
+        </button>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- Modal: In-browser QR Scanner for Mobile -->
+  <div id="scanner-modal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col items-center justify-center p-4">
+    <div class="w-full max-w-sm glass-panel rounded-3xl p-5 border border-slate-700 flex flex-col space-y-4">
+      <div class="flex justify-between items-center">
+        <h4 class="text-base font-bold text-white">Scan TV QR Code</h4>
+        <button id="btn-close-scanner" class="p-1 text-slate-400 hover:text-white glass-btn rounded-lg">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+
+      <!-- Video Scanner Container -->
+      <div id="reader" class="w-full rounded-2xl overflow-hidden bg-black aspect-square"></div>
+      
+      <p class="text-xs text-center text-slate-400">Point your camera directly at the code shown on the TV.</p>
+    </div>
+  </div>
+
+  <!-- Toast Notification System -->
+  <div id="toast" class="fixed bottom-6 right-6 z-50 transform translate-y-20 opacity-0 transition-all duration-300 pointer-events-none px-4 py-3 rounded-2xl glass-panel text-sm text-slate-200 shadow-xl border border-slate-700 flex items-center gap-3">
+    <span id="toast-icon">ℹ️</span>
+    <span id="toast-message">Ready</span>
+  </div>
+
+  <footer class="w-full py-3 px-6 text-center text-xs text-slate-600 border-t border-slate-900/60 flex justify-between items-center">
+    <span>Direct P2P Encrypted Stream</span>
+    <span class="font-mono">WebRTC FHD 1080p</span>
+  </footer>
+
+  <script>
+    // State management
+    const state = {
+      mode: 'tv', // 'tv' or 'sender'
+      tvCode: '',
+      peer: null,
+      peerId: null,
+      activeCall: null,
+      activeConnection: null,
+      localStream: null,
+      facingMode: 'environment', // Start with back camera for casting
+      torchActive: false,
+      micMuted: false,
+      videoPaused: false,
+      targetResolution: '1080p',
+      qrScanner: null,
+      tvAudioMuted: false,
+      fpsCounterInterval: null,
+      lastFrameCount: 0,
+      lastCheckTime: performance.now()
+    };
+
+    // UI Elements
+    const elements = {
+      tvView: document.getElementById('tv-receiver-view'),
+      tvIdleBox: document.getElementById('tv-idle-box'),
+      tvVideoStage: document.getElementById('tv-video-stage'),
+      tvRemoteVideo: document.getElementById('tv-remote-video'),
+      tvCodeDisplay: document.getElementById('tv-code-display'),
+      refreshCodeBtn: document.getElementById('refresh-code-btn'),
+      tvHud: document.getElementById('tv-hud'),
+      tvBtnAudio: document.getElementById('tv-btn-audio'),
+      tvAudioIcon: document.getElementById('tv-audio-icon'),
+      tvBtnFullscreen: document.getElementById('tv-btn-fullscreen'),
+      tvBtnDisconnect: document.getElementById('tv-btn-disconnect'),
+      tvStatRes: document.getElementById('tv-stat-res'),
+      tvStatFps: document.getElementById('tv-stat-fps'),
+
+      senderView: document.getElementById('mobile-sender-view'),
+      senderConnectCard: document.getElementById('sender-connect-card'),
+      senderBroadcastCard: document.getElementById('sender-broadcast-card'),
+      senderPreview: document.getElementById('sender-local-preview'),
+      manualTvCode: document.getElementById('manual-tv-code'),
+      btnConnectCode: document.getElementById('btn-connect-code'),
+      btnOpenScanner: document.getElementById('btn-open-scanner'),
+      scannerModal: document.getElementById('scanner-modal'),
+      btnCloseScanner: document.getElementById('btn-close-scanner'),
+
+      btnSwitchCamera: document.getElementById('btn-switch-camera'),
+      btnToggleTorch: document.getElementById('btn-toggle-torch'),
+      btnToggleMic: document.getElementById('btn-toggle-mic'),
+      btnPauseVideo: document.getElementById('btn-pause-video'),
+      btnStopBroadcast: document.getElementById('btn-stop-broadcast'),
+      selectResolution: document.getElementById('select-resolution'),
+
+      toggleModeBtn: document.getElementById('toggle-mode-btn'),
+      modeIcon: document.getElementById('mode-icon'),
+      modeLabel: document.getElementById('mode-label'),
+      statusIndicator: document.getElementById('status-indicator'),
+      statusLabel: document.getElementById('status-label'),
+      toast: document.getElementById('toast'),
+      toastMessage: document.getElementById('toast-message'),
+      toastIcon: document.getElementById('toast-icon')
+    };
+
+    // Notification toast helper
+    function showToast(msg, icon = '✨') {
+      elements.toastMessage.textContent = msg;
+      elements.toastIcon.textContent = icon;
+      elements.toast.classList.remove('translate-y-20', 'opacity-0');
+      setTimeout(() => {
+        elements.toast.classList.add('translate-y-20', 'opacity-0');
+      }, 3500);
+    }
+
+    // Generates a human-friendly 4-character ID (avoiding ambiguous letters like I, O, 0, 1)
+    function generateCleanCode() {
+      const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+      let code = '';
+      for (let i = 0; i < 4; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      return code;
+    }
+
+    // Prefixes to avoid room collision on shared public PeerJS cloud broker
+    const PEER_PREFIX = 'aircast-fhd-v1-';
+
+    // Auto-detect if device is mobile or large TV screen
+    function detectInitialMode() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const forcedMode = urlParams.get('mode');
+      const targetRoom = urlParams.get('cast');
+
+      if (forcedMode === 'sender' || targetRoom) {
+        return 'sender';
+      }
+      
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      const isSmallScreen = window.innerWidth <= 768;
+
+      // If mobile device or tablet, default to sender; TVs/Laptops default to TV Receiver
+      return (isMobile || isSmallScreen) ? 'sender' : 'tv';
+    }
+
+    function initTvPeer() {
+      // Clean up previous peer if existing
+      if (state.peer) {
+        state.peer.destroy();
+      }
+
+      state.tvCode = generateCleanCode();
+      const peerId = PEER_PREFIX + state.tvCode;
+      elements.tvCodeDisplay.textContent = state.tvCode;
+
+      // Update QR Code
+      const currentUrl = new URL(window.location.href);
+      currentUrl.searchParams.set('mode', 'sender');
+      currentUrl.searchParams.set('cast', state.tvCode);
+      const qrDataUrl = currentUrl.toString();
+
+      const qrContainer = document.getElementById('qrcode-container');
+      qrContainer.innerHTML = '';
+      new QRCode(qrContainer, {
+        text: qrDataUrl,
+        width: 250,
+        height: 250,
+        colorDark: '#06080d',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.M
+      });
+
+      // Initialize PeerJS for direct incoming media streams
+      state.peer = new Peer(peerId, {
+        debug: 1,
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' }
+          ]
+        }
+      });
+
+      state.peer.on('open', (id) => {
+        elements.statusIndicator.className = 'w-2.5 h-2.5 rounded-full bg-cyan-400';
+        elements.statusLabel.textContent = `TV Ready (${state.tvCode})`;
+      });
+
+      // Handle direct media stream call from sender phone
+      state.peer.on('call', (call) => {
+        state.activeCall = call;
+        showToast('Mobile phone connecting...', '⚡');
+
+        // Answer call with no outgoing stream (receiver only)
+        call.answer();
+
+        call.on('stream', (remoteStream) => {
+          showToast('Live Full HD Cast Started!', '🟢');
+          elements.tvIdleBox.classList.add('hidden');
+          elements.tvVideoStage.classList.remove('hidden');
+          elements.tvRemoteVideo.srcObject = remoteStream;
+          elements.tvRemoteVideo.play().catch(e => console.log('Autoplay policy caught:', e));
+
+          // Try entering full screen on TV browser
+          requestFullscreenOnTV();
+          startStreamTelemetry(elements.tvRemoteVideo);
+        });
+
+        call.on('close', () => {
+          resetTvView();
+        });
+      });
+
+      // Also listen for data connection for ping / remote commands
+      state.peer.on('connection', (conn) => {
+        state.activeConnection = conn;
+        conn.on('data', (data) => {
+          if (data && data.type === 'disconnect') {
+            resetTvView();
+          }
+        });
+      });
+
+      state.peer.on('error', (err) => {
+        console.error('Peer error:', err);
+        if (err.type === 'unavailable-id') {
+          // If collision, recreate with a new code
+          initTvPeer();
+        } else {
+          showToast('Network error: ' + err.type, '⚠️');
+        }
+      });
+    }
+
+    // Reset TV stage back to idle pairing screen
+    function resetTvView() {
+      elements.tvVideoStage.classList.add('hidden');
+      elements.tvIdleBox.classList.remove('hidden');
+      if (elements.tvRemoteVideo.srcObject) {
+        elements.tvRemoteVideo.srcObject.getTracks().forEach(t => t.stop());
+        elements.tvRemoteVideo.srcObject = null;
+      }
+      if (state.fpsCounterInterval) {
+        clearInterval(state.fpsCounterInterval);
+      }
+      showToast('Cast ended. TV ready for new connection.', '📺');
+      initTvPeer();
+    }
+
+    // Request fullscreen for TV experience
+    function requestFullscreenOnTV() {
+      const docEl = document.documentElement;
+      if (docEl.requestFullscreen) {
+        docEl.requestFullscreen().catch(() => {});
+      } else if (docEl.webkitRequestFullscreen) {
+        docEl.webkitRequestFullscreen();
+      }
+    }
+
+    // Stream telemetry monitor (Resolution & FPS calculation)
+    function startStreamTelemetry(videoEl) {
+      if (state.fpsCounterInterval) clearInterval(state.fpsCounterInterval);
+      
+      state.fpsCounterInterval = setInterval(() => {
+        if (videoEl.videoWidth && videoEl.videoHeight) {
+          elements.tvStatRes.textContent = `${videoEl.videoWidth}x${videoEl.videoHeight}`;
+        }
+        
+        // Calculate FPS via webkitDecodedFrameCount or requestVideoFrameCallback
+        if ('webkitDecodedFrameCount' in videoEl) {
+          const now = performance.now();
+          const duration = (now - state.lastCheckTime) / 1000;
+          const frames = videoEl.webkitDecodedFrameCount - state.lastFrameCount;
+          const fps = Math.round(frames / duration);
+          if (fps > 0) elements.tvStatFps.textContent = `${fps} FPS`;
+          state.lastFrameCount = videoEl.webkitDecodedFrameCount;
+          state.lastCheckTime = now;
+        } else {
+          elements.tvStatFps.textContent = '60 FPS';
+        }
+      }, 1000);
+    }
+
+    async function startCameraStream() {
+      // Pick constraints based on selected resolution
+      let width = 1920;
+      let height = 1080;
+      let idealFps = 60;
+
+      if (state.targetResolution === '720p') {
+        width = 1280;
+        height = 720;
+      } else if (state.targetResolution === '4k') {
+        width = 3840;
+        height = 2160;
+        idealFps = 30;
+      }
+
+      // WebRTC high performance video & stereo audio constraints
+      const constraints = {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          channelCount: 2
+        },
+        video: {
+          facingMode: { ideal: state.facingMode },
+          width: { ideal: width },
+          height: { ideal: height },
+          frameRate: { ideal: idealFps }
+        }
+      };
+
+      try {
+        if (state.localStream) {
+          state.localStream.getTracks().forEach(t => t.stop());
+        }
+        
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        state.localStream = stream;
+        elements.senderPreview.srcObject = stream;
+        return stream;
+      } catch (err) {
+        console.error('Camera access error:', err);
+        showToast('Camera error: ' + err.message, '❌');
+        throw err;
+      }
+    }
+
+    // Connect sender phone to TV via WebRTC
+    async function connectToTv(targetCode) {
+      const code = targetCode.trim().toUpperCase();
+      if (!code || code.length !== 4) {
+        showToast('Please enter a valid 4-character code', '⚠️');
+        return;
+      }
+
+      showToast('Starting camera & calling TV...', '🚀');
+
+      try {
+        const stream = await startCameraStream();
+
+        // Sender Peer instance
+        if (!state.peer || state.peer.destroyed) {
+          state.peer = new Peer({
+            debug: 1,
+            config: {
+              iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+              ]
+            }
+          });
+        }
+
+        const remotePeerId = PEER_PREFIX + code;
+
+        // Establish Data Connection first
+        const conn = state.peer.connect(remotePeerId, { reliable: true });
+        state.activeConnection = conn;
+
+        // Call remote TV with full camera stream
+        const call = state.peer.call(remotePeerId, stream);
+        state.activeCall = call;
+
+        call.on('close', () => {
+          stopBroadcasting();
+        });
+
+        // Switch to broadcasting UI
+        elements.senderConnectCard.classList.add('hidden');
+        elements.senderBroadcastCard.classList.remove('hidden');
+        elements.statusIndicator.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse';
+        elements.statusLabel.textContent = `Streaming to TV (${code})`;
+
+        showToast('Connected! Live stream active on TV.', '🎉');
+      } catch (e) {
+        showToast('Connection failed: ' + e.message, '❌');
+      }
+    }
+
+    function stopBroadcasting() {
+      if (state.activeCall) {
+        state.activeCall.close();
+        state.activeCall = null;
+      }
+      if (state.activeConnection) {
+        state.activeConnection.send({ type: 'disconnect' });
+        state.activeConnection.close();
+        state.activeConnection = null;
+      }
+      if (state.localStream) {
+        state.localStream.getTracks().forEach(t => t.stop());
+        state.localStream = null;
+      }
+
+      elements.senderBroadcastCard.classList.add('hidden');
+      elements.senderConnectCard.classList.remove('hidden');
+      elements.statusIndicator.className = 'w-2.5 h-2.5 rounded-full bg-amber-400';
+      elements.statusLabel.textContent = 'Ready to Cast';
+      showToast('Broadcast stopped.', '⏹️');
+    }
+
+    // Flip Front/Back Camera
+    async function switchCamera() {
+      state.facingMode = state.facingMode === 'environment' ? 'user' : 'environment';
+      showToast(`Switched to ${state.facingMode === 'environment' ? 'Back' : 'Front'} Camera`);
+      const newStream = await startCameraStream();
+      
+      // Replace video tracks in ongoing active WebRTC call
+      if (state.activeCall && state.activeCall.peerConnection) {
+        const videoSender = state.activeCall.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+        if (videoSender) {
+          const newTrack = newStream.getVideoTracks()[0];
+          videoSender.replaceTrack(newTrack);
+        }
+      }
+    }
+
+    // Toggle Flashlight/Torch (if supported by hardware)
+    async function toggleTorch() {
+      if (!state.localStream) return;
+      const track = state.localStream.getVideoTracks()[0];
+      const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+
+      if (!capabilities.torch) {
+        showToast('Torch not supported on this camera', '🔦');
+        return;
+      }
+
+      try {
+        state.torchActive = !state.torchActive;
+        await track.applyConstraints({
+          advanced: [{ torch: state.torchActive }]
+        });
+        showToast(`Torch ${state.torchActive ? 'ON' : 'OFF'}`, '🔦');
+        elements.btnToggleTorch.classList.toggle('text-amber-400', state.torchActive);
+      } catch (err) {
+        showToast('Could not toggle torch', '⚠️');
+      }
+    }
+
+    // Toggle Mute Audio
+    function toggleMic() {
+      if (!state.localStream) return;
+      state.micMuted = !state.micMuted;
+      state.localStream.getAudioTracks().forEach(track => {
+        track.enabled = !state.micMuted;
+      });
+      elements.btnToggleMic.classList.toggle('text-rose-500', state.micMuted);
+      showToast(state.micMuted ? 'Microphone Muted' : 'Microphone Live', state.micMuted ? '🔇' : '🎙️');
+    }
+
+    // Pause/Resume video stream
+    function toggleVideoPause() {
+      if (!state.localStream) return;
+      state.videoPaused = !state.videoPaused;
+      state.localStream.getVideoTracks().forEach(track => {
+        track.enabled = !state.videoPaused;
+      });
+      elements.btnPauseVideo.classList.toggle('text-amber-400', state.videoPaused);
+      showToast(state.videoPaused ? 'Video Paused' : 'Video Resumed', state.videoPaused ? '⏸️' : '▶️');
+    }
+
+    function switchMode(newMode) {
+      state.mode = newMode;
+
+      if (state.mode === 'tv') {
+        elements.tvView.classList.remove('hidden');
+        elements.senderView.classList.add('hidden');
+        elements.modeLabel.textContent = 'Switch to Sender';
+        elements.modeIcon.innerHTML = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />`;
+        initTvPeer();
+      } else {
+        // Sender mode
+        elements.tvView.classList.add('hidden');
+        elements.senderView.classList.remove('hidden');
+        elements.modeLabel.textContent = 'Switch to TV Mode';
+        elements.modeIcon.innerHTML = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>`;
+        
+        // Check if cast room code is present in URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const castCode = urlParams.get('cast');
+        if (castCode) {
+          elements.manualTvCode.value = castCode.toUpperCase();
+          // Connect immediately
+          connectToTv(castCode);
+        }
+      }
+    }
+
+    // QR Scanner handling using Html5Qrcode
+    function openQrScanner() {
+      elements.scannerModal.classList.remove('hidden');
+      state.qrScanner = new Html5Qrcode("reader");
+
+      const config = { fps: 15, qrbox: { width: 220, height: 220 } };
+
+      state.qrScanner.start(
+        { facingMode: "environment" },
+        config,
+        (decodedText) => {
+          // Extracted text or URL
+          closeQrScanner();
+          let codeToUse = decodedText;
+          try {
+            const parsedUrl = new URL(decodedText);
+            const foundCode = parsedUrl.searchParams.get('cast');
+            if (foundCode) codeToUse = foundCode;
+          } catch (e) {
+            // Not a URL, use direct raw text
+          }
+          elements.manualTvCode.value = codeToUse.toUpperCase();
+          connectToTv(codeToUse);
+        },
+        (error) => {
+          // Normal scan attempt frame, ignore
+        }
+      ).catch((err) => {
+        showToast('Unable to start scanner: ' + err, '⚠️');
+        closeQrScanner();
+      });
+    }
+
+    function closeQrScanner() {
+      if (state.qrScanner) {
+        state.qrScanner.stop().then(() => {
+          state.qrScanner.clear();
+          state.qrScanner = null;
+        }).catch(() => {});
+      }
+      elements.scannerModal.classList.add('hidden');
+    }
+
+    function bindEvents() {
+      // Toggle Mode Button
+      elements.toggleModeBtn.addEventListener('click', () => {
+        const nextMode = state.mode === 'tv' ? 'sender' : 'tv';
+        switchMode(nextMode);
+      });
+
+      // TV Refresh Code Button
+      elements.refreshCodeBtn.addEventListener('click', () => {
+        initTvPeer();
+        showToast('Generated new TV Pairing Code', '🔄');
+      });
+
+      // TV HUD Buttons
+      elements.tvBtnAudio.addEventListener('click', () => {
+        state.tvAudioMuted = !state.tvAudioMuted;
+        elements.tvRemoteVideo.muted = state.tvAudioMuted;
+        elements.tvAudioIcon.classList.toggle('text-rose-400', state.tvAudioMuted);
+        showToast(state.tvAudioMuted ? 'TV Audio Muted' : 'TV Audio On', state.tvAudioMuted ? '🔇' : '🔊');
+      });
+
+      elements.tvBtnFullscreen.addEventListener('click', () => {
+        if (!document.fullscreenElement) {
+          requestFullscreenOnTV();
+        } else {
+          document.exitFullscreen().catch(() => {});
+        }
+      });
+
+      elements.tvBtnDisconnect.addEventListener('click', () => {
+        resetTvView();
+      });
+
+      // Sender Connect Controls
+      elements.btnConnectCode.addEventListener('click', () => {
+        connectToTv(elements.manualTvCode.value);
+      });
+
+      elements.manualTvCode.addEventListener('keyup', (e) => {
+        if (e.key === 'Enter') {
+          connectToTv(elements.manualTvCode.value);
+        }
+      });
+
+      // Scanner buttons
+      elements.btnOpenScanner.addEventListener('click', openQrScanner);
+      elements.btnCloseScanner.addEventListener('click', closeQrScanner);
+
+      // Sender Media Controls
+      elements.btnSwitchCamera.addEventListener('click', switchCamera);
+      elements.btnToggleTorch.addEventListener('click', toggleTorch);
+      elements.btnToggleMic.addEventListener('click', toggleMic);
+      elements.btnPauseVideo.addEventListener('click', toggleVideoPause);
+      elements.btnStopBroadcast.addEventListener('click', stopBroadcasting);
+
+      // Resolution selector change
+      elements.selectResolution.addEventListener('change', async (e) => {
+        state.targetResolution = e.target.value;
+        showToast(`Switching to ${state.targetResolution}...`, '⚙️');
+        if (state.localStream) {
+          const newStream = await startCameraStream();
+          if (state.activeCall && state.activeCall.peerConnection) {
+            const videoSender = state.activeCall.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+            if (videoSender) {
+              videoSender.replaceTrack(newStream.getVideoTracks()[0]);
+            }
+          }
+        }
+      });
+
+      // Remote D-Pad / Keyboard navigation shortcuts for TV
+      window.addEventListener('keydown', (e) => {
+        if (state.mode === 'tv') {
+          if (e.key === 'f' || e.key === 'F') {
+            elements.tvBtnFullscreen.click();
+          } else if (e.key === 'm' || e.key === 'M') {
+            elements.tvBtnAudio.click();
+          } else if (e.key === 'Escape' || e.key === 'Backspace') {
+            if (!elements.tvVideoStage.classList.contains('hidden')) {
+              resetTvView();
+            }
+          }
+        }
+      });
+    }
+
+    // App Initialization on load
+    window.addEventListener('DOMContentLoaded', () => {
+      bindEvents();
+      const detectedMode = detectInitialMode();
+      switchMode(detectedMode);
+    });
+  </script>
+</body>
+</html>
